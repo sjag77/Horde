@@ -1,0 +1,30 @@
+# Unity generates these from Assets/ + ProjectSettings/ — never commit them
+Game/Library/
+Game/Temp/
+Game/Obj/
+Game/obj/
+Game/Logs/
+Game/UserSettings/
+Game/MemoryCaptures/
+Game/Recordings/
+Game/Builds/
+Game/[Bb]uild/
+*.csproj
+*.sln
+*.unityproj
+*.user
+
+# Build output and logs
+*.apk
+*.aab
+*.tar.gz
+*.log
+
+# OS / editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Unity Android build scratch + obsolete staging copy
+Game/.utmp/
+Staging/
