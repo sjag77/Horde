@@ -86,7 +86,8 @@ namespace Horde
             {
                 age[i] += dt;
                 float pulse = 0.5f + Mathf.Sin(age[i] * 4f) * 0.5f;
-                body[i].transform.position = pos[i] + new Vector2(0f, Mathf.Sin(age[i] * 3.2f) * 0.06f);
+                body[i].transform.SetPositionAndRotation(
+                    Rig.At(pos[i], 0.55f + Mathf.Sin(age[i] * 3.2f) * 0.12f), g.Billboard);   // hovers and faces you
                 glow[i].transform.position = pos[i];
                 glow[i].transform.localScale = Vector3.one * (1.6f + pulse * 0.3f);
                 var gc = body[i].color; gc.a = 0.25f + pulse * 0.25f; glow[i].color = gc;

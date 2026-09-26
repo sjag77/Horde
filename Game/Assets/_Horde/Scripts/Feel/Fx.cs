@@ -6,6 +6,7 @@ namespace Horde
     public sealed class Fx
     {
         const int SparkCap = 320, PopCap = 48;
+        const float SparkHeight = 0.45f;   // sparks fly at chest height, rings stay on the floor
         const float PopTime = 0.28f;
 
         int sparks, pops;
@@ -19,8 +20,11 @@ namespace Horde
         readonly SpriteRenderer[] pSr = new SpriteRenderer[PopCap];
         readonly Transform[] pTr = new Transform[PopCap];
 
+        readonly Game game;
+
         public Fx(Game g)
         {
+            game = g;
             var root = new GameObject("Fx").transform;
             for (int i = 0; i < SparkCap; i++)
             {
@@ -55,7 +59,7 @@ namespace Horde
                 sSize[i] = 0.06f + Random.value * 0.08f;
                 sColor[i] = color;
                 sSr[i].enabled = true;
-                sTr[i].position = at;
+                sTr[i].SetPositionAndRotation(Rig.At(at, SparkHeight), game.Billboard);   // sparks face the camera
             }
         }
 
@@ -81,7 +85,7 @@ namespace Horde
                 sVel[i] *= drag;
                 float k = sLife[i] / sMax[i];
                 float s = sSize[i] * (0.4f + k);
-                sTr[i].position = sPos[i];
+                sTr[i].position = Rig.At(sPos[i], SparkHeight);
                 sTr[i].localScale = new Vector3(s, s, 1f);
                 var c = sColor[i]; c.a = k; sSr[i].color = c;
             }

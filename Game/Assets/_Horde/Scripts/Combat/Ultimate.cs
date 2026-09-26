@@ -48,9 +48,8 @@ namespace Horde
             var p = g.Player;
             float healthGrowth = 1f + g.RunTime / 60f * 0.2f + Mathf.Max(0f, g.RunTime - 90f) / 60f * 0.7f + Mathf.Max(0f, g.RunTime - 540f) / 60f * 1.2f;   // same curve enemy HP uses
             float damage = 5000f * healthGrowth * (1f + 0.5f * (Rank - 1)) * p.DamageMul;
-            var cam = g.Cam;                      // wipe out everything the player can see
-            float vh = cam.orthographicSize, vw = vh * cam.aspect;
-            g.Enemies.DamageInView(cam.transform.position, vw, vh, damage, 9f, 2.5f);
+            // wipe out everything the player can see
+            g.Enemies.DamageInView(g.CamFocus, g.ViewHalfW, g.ViewHalfH, damage, 9f, 2.5f);
 
             g.Fx.Pop(p.Pos, Color.white, 6f);
             g.Fx.Pop(p.Pos, Gold, 16f);

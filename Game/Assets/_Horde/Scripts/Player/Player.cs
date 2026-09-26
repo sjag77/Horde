@@ -9,12 +9,11 @@ namespace Horde
         public Color HeroColor => BodyColor;
 
         readonly Game g;
-        readonly SpriteRenderer body, aura;
-        readonly Transform bodyTr, auraTr;
+        readonly SpriteRenderer aura;      // ground glow under the ship
+        readonly Transform auraTr;
+        readonly HeroRig rig;
         float hurtFlash;
-        const int GhostCap = 6;
-        readonly SpriteRenderer[] ghosts = new SpriteRenderer[GhostCap];
-        readonly float[] ghostLife = new float[GhostCap];
+        Vector2 lastMove;
 
         public Vector2 Pos;
         public Vector2 Facing = Vector2.up;
@@ -26,16 +25,9 @@ namespace Horde
         {
             this.g = g;
             aura = g.NewSprite("PlayerAura", Sprites.Glow, new Color(0.3f, 0.9f, 1f, 0.35f), 5);
-            body = g.NewSprite("Player", Sprites.Hero, BodyColor, 20);
             auraTr = aura.transform;
-            bodyTr = body.transform;
             auraTr.localScale = Vector3.one * 2.4f;
-            bodyTr.localScale = Vector3.one * 0.95f;
-            for (int i = 0; i < GhostCap; i++)
-            {
-                ghosts[i] = g.NewSprite("DashGhost", Sprites.Hero, Color.clear, 19);
-                ghosts[i].enabled = false;
-            }
+            rig = new HeroRig(g);
         }
 
         public static float XpFor(int level) => Mathf.Round(4f + Mathf.Pow(level, 1.4f) * 3f);
@@ -53,7 +45,8 @@ namespace Horde
             AreaMul = 1f;
             Iframes = 0f;
             BlinkCooldown = 0f;
-            for (int i = 0; i < GhostCap; i++) { ghostLife[i] = 0f; ghosts[i].enabled = false; }
+            rig.ClearGhosts();
+            rig.Visible = true;
             hurtFlash = 0f;
             Level = 1;
             Xp = 0f;
@@ -64,31 +57,22 @@ namespace Horde
         public void Tick(float dt, Vector2 move)
         {
             if (move.sqrMagnitude > 0.0001f) Facing = move.normalized;
+            lastMove = move;
             Pos += move * (MoveSpeed * dt);
             Pos.x = Mathf.Clamp(Pos.x, -Game.ArenaHalfW + Radius, Game.ArenaHalfW - Radius);
             Pos.y = Mathf.Clamp(Pos.y, -Game.ArenaHalfH + Radius, Game.ArenaHalfH - Radius);
             if (Iframes > 0f) Iframes -= dt;
             if (BlinkCooldown > 0f) BlinkCooldown -= dt;
             if (hurtFlash > 0f) hurtFlash -= dt * 4f;
-            for (int i = 0; i < GhostCap; i++)   // dash afterimages fade and swell
-            {
-                if (ghostLife[i] <= 0f) continue;
-                ghostLife[i] -= dt;
-                if (ghostLife[i] <= 0f) { ghosts[i].enabled = false; continue; }
-                float k = ghostLife[i] / 0.5f;
-                ghosts[i].color = new Color(BodyColor.r, BodyColor.g, BodyColor.b, 0.55f * k);
-                ghosts[i].transform.localScale = Vector3.one * (0.95f * (1.3f - 0.3f * k));
-            }
+            rig.Tick(dt, Pos, Facing, lastMove, hurtFlash, Iframes > 0f);
             Apply();
         }
 
         void Apply()
         {
-            bodyTr.position = Pos;
             auraTr.position = Pos;
-            bodyTr.rotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(Facing.y, Facing.x) * Mathf.Rad2Deg);
-            body.color = Color.Lerp(BodyColor, Color.white, Mathf.Clamp01(hurtFlash));
-            body.enabled = !(Iframes > 0f && ((int)(Iframes * 20f)) % 2 == 0);
+            // blink the ship while invulnerable, exactly as the 2D build did
+            rig.Visible = !(Iframes > 0f && ((int)(Iframes * 20f)) % 2 == 0);
         }
 
         public bool Damage(float amount)
@@ -105,6 +89,7 @@ namespace Horde
         }
 
         public const float BlinkCd = 2.5f;
+        public const float DashDistance = 5.8f;   // v0.0.2: a real escape, not a hop
         public float BlinkCooldown { get; private set; }
         public float BlinkFrac => Mathf.Clamp01(BlinkCooldown / BlinkCd);
 
@@ -113,24 +98,16 @@ namespace Horde
         {
             if (BlinkCooldown > 0f || Hp <= 0f) return;
             Vector2 from = Pos;
-            Pos += Facing * 3.4f;
+            Pos += Facing * DashDistance;
             Pos.x = Mathf.Clamp(Pos.x, -Game.ArenaHalfW + Radius, Game.ArenaHalfW - Radius);
             Pos.y = Mathf.Clamp(Pos.y, -Game.ArenaHalfH + Radius, Game.ArenaHalfH - Radius);
-            Iframes = Mathf.Max(Iframes, 0.4f);   // a split second of invulnerability
+            Iframes = Mathf.Max(Iframes, 0.5f);   // a split second of invulnerability
             BlinkCooldown = BlinkCd;
-            for (int k = 0; k <= 4; k++) g.Fx.Burst(Vector2.Lerp(from, Pos, k / 4f), BodyColor, 4, 2.5f);
+            for (int k = 0; k <= 7; k++) g.Fx.Burst(Vector2.Lerp(from, Pos, k / 7f), BodyColor, 4, 2.5f);
             g.Fx.Pop(from, BodyColor, 1.6f);
             g.Fx.Pop(Pos, Color.white, 2.2f);
             g.Fx.Pop(Pos, BodyColor, 3.4f);
-            float deg = Mathf.Atan2(Facing.y, Facing.x) * Mathf.Rad2Deg;
-            for (int i = 0; i < GhostCap; i++)
-            {
-                float t = i / (float)(GhostCap - 1);
-                ghosts[i].transform.position = Vector2.Lerp(from, Pos, t);
-                ghosts[i].transform.rotation = Quaternion.Euler(0f, 0f, deg);
-                ghostLife[i] = 0.2f + 0.3f * t;
-                ghosts[i].enabled = true;
-            }
+            rig.Dash(from, Pos, Mathf.Atan2(Facing.y, Facing.x) * Mathf.Rad2Deg);
             g.Shake(0.12f);
             g.Sfx.Play(Sound.Zap, 0.1f);
             Apply();
@@ -140,6 +117,7 @@ namespace Horde
         {
             BodyColor = c;
             aura.color = new Color(c.r, c.g, c.b, 0.35f);
+            rig.SetColor(c);
             Apply();
         }
 

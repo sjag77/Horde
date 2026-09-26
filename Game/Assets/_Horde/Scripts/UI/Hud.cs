@@ -219,6 +219,16 @@ namespace Horde
             }
         }
 
+        /// <summary>Verification builds pick the first upgrade so an unattended run keeps going.</summary>
+        public void AutoPick()
+        {
+            if (options == null || options.Count == 0) return;
+            var opt = options[0];
+            options = null;
+            opt.Apply();
+            g.OnUpgradeChosen();
+        }
+
         public void ShowLevelUp(List<UpgradeOption> list)
         {
             choiceHeader.text = "LEVEL UP";
@@ -489,7 +499,10 @@ namespace Horde
         // ---- dashboard: title, how to play, best runs, play ----------------------------------------
         const string Rules =
             "- Drag anywhere to move. The stick stays where your thumb lands. Abilities fire on their own.\n" +
-            "- DASH button (or double-tap): a quick dash with a split second of invulnerability. A boss charge locks onto where you stood - dash out of the red ring!\n" +
+            "- DASH button (or double-tap): a long dash with a split second of invulnerability.\n" +
+            "- A boss rears back, glows and points a spear of fire before it charges - that is your cue to dash sideways. It commits to that line and will not follow you.\n" +
+            "- Your hero's innate ring starts small and grows with Wide Reach; Power Rune makes it burn, poison or ignite harder.\n" +
+            "- Watch the horde change: runners sprint, hounds flank, spitters shoot from range, and splitters burst into a colony of mites - bring area damage.\n" +
             "- Collect XP gems and pick 1 of 3 upgrades every level.\n" +
             "- Beat 4 bosses: each gives +1 ability slot (max 6) or the Ultimate. Kill them fast - bosses enrage over time.\n" +
             "- The minimap shows the next boss landing. Cheese heals, magnets pull XP, corner portals warp you (12 s).\n" +
@@ -524,12 +537,12 @@ namespace Horde
             var p2 = helpPage2.transform;
 
             Txt("Title", p1, "HOW TO PLAY", 80, TextAnchor.MiddleCenter, Cyan, Half, Half, new Vector2(-520f, 820f), new Vector2(520f, 930f));
-            Txt("Rules", p1, Rules, 31, TextAnchor.UpperLeft, Color.white, Half, Half, new Vector2(-480f, 290f), new Vector2(480f, 800f));
-            Txt("HeroesLabel", p1, "HEROES", 50, TextAnchor.MiddleCenter, Gold, Half, Half, new Vector2(-520f, 210f), new Vector2(520f, 270f));
+            Txt("Rules", p1, Rules, 27, TextAnchor.UpperLeft, Color.white, Half, Half, new Vector2(-480f, 250f), new Vector2(480f, 810f));
+            Txt("HeroesLabel", p1, "HEROES", 50, TextAnchor.MiddleCenter, Gold, Half, Half, new Vector2(-520f, 180f), new Vector2(520f, 240f));
             for (int h = 0; h < HeroKit.Count; h++)
             {
                 var id = (HeroId)h;
-                float y = 140f - h * 235f;
+                float y = 110f - h * 230f;
                 var icon = Img("HeroIcon" + h, p1, HeroKit.Tint(id), Half, Half, new Vector2(-480f, y - 80f), new Vector2(-380f, y + 20f), Sprites.Hero);
                 icon.rectTransform.localRotation = Quaternion.Euler(0f, 0f, 90f);
                 Txt("HeroName" + h, p1, HeroKit.Name(id) + "  -  " + HeroKit.Title(id), 36, TextAnchor.UpperLeft, HeroKit.Tint(id), Half, Half, new Vector2(-350f, y - 10f), new Vector2(480f, y + 40f));
@@ -542,10 +555,10 @@ namespace Horde
             for (int i = 0; i < AbilitySet.Count; i++)
             {
                 var id = (AbilityId)i;
-                float y = 690f - i * 185f;
-                Img("Icon" + i, p2, AbilitySet.Tint(id), Half, Half, new Vector2(-480f, y - 80f), new Vector2(-380f, y + 20f), AbilitySet.Icon(id));
-                Txt("Name" + i, p2, AbilitySet.Name(id), 40, TextAnchor.UpperLeft, AbilitySet.Tint(id), Half, Half, new Vector2(-350f, y - 10f), new Vector2(480f, y + 45f));
-                Txt("Desc" + i, p2, AbilitySet.Describe(id, 1), 30, TextAnchor.UpperLeft, Muted, Half, Half, new Vector2(-350f, y - 100f), new Vector2(480f, y - 10f));
+                float y = 700f - i * 150f;
+                Img("Icon" + i, p2, AbilitySet.Tint(id), Half, Half, new Vector2(-480f, y - 62f), new Vector2(-396f, y + 22f), AbilitySet.Icon(id));
+                Txt("Name" + i, p2, AbilitySet.Name(id), 36, TextAnchor.UpperLeft, AbilitySet.Tint(id), Half, Half, new Vector2(-350f, y - 6f), new Vector2(480f, y + 42f));
+                Txt("Desc" + i, p2, AbilitySet.Describe(id, 1), 26, TextAnchor.UpperLeft, Muted, Half, Half, new Vector2(-350f, y - 88f), new Vector2(480f, y - 6f));
             }
             MakeSmallButton(p2, "< HEROES", new Vector2(-200f, -760f), new Vector2(400f, 150f), () => ShowHelpPage(1));
             MakeSmallButton(p2, "BACK", new Vector2(220f, -760f), new Vector2(360f, 150f), () => helpPanel.SetActive(false));
@@ -674,6 +687,7 @@ namespace Horde
         }
 
         public void ShowWarning() => warningPanel.SetActive(true);
+        public void CloseWarning() => warningPanel.SetActive(false);
 
         // Shown every launch: a friendly heads-up from the developer.
         GameObject BuildWarningPanel()
@@ -711,9 +725,8 @@ namespace Horde
             var bg = new Color32(6, 9, 18, 215);
             for (int i = 0; i < mapBuf.Length; i++) mapBuf[i] = bg;
 
-            var cam = g.Cam;
-            float vh = cam.orthographicSize, vw = vh * cam.aspect;
-            Vector2 cp = cam.transform.position;
+            float vh = g.ViewHalfH, vw = g.ViewHalfW;
+            Vector2 cp = g.CamFocus;
             MapRect(cp.x - vw, cp.y - vh, cp.x + vw, cp.y + vh, new Color32(70, 110, 170, 255));
 
             var xp = g.Xp;

@@ -34,6 +34,17 @@ namespace Horde
 
         public Camera Cam { get; private set; }
         public Material SpriteMat { get; private set; }
+        public Material LitMat { get; private set; }
+        public Material GlowMat { get; private set; }
+        public Light KeyLight { get; private set; }
+        /// <summary>Rotation that makes a flat quad face the tilted camera.</summary>
+        public Quaternion Billboard => Cam.transform.rotation;
+        /// <summary>How much arena the camera shows, in world units (the 3D view is a trapezoid,
+        /// so this is the honest half-extent at the hero's feet).</summary>
+        public float ViewHalfH { get; private set; } = 8.8f;
+        public float ViewHalfW => ViewHalfH * Mathf.Max(0.45f, Cam.aspect);
+        public const float CamPitch = 42f;      // degrees of tilt: enough to see the models stand up
+        public const float CamFov = 46f;
         public Player Player { get; private set; }
         public EnemySystem Enemies { get; private set; }
         public ProjectileSystem Projectiles { get; private set; }
@@ -54,11 +65,15 @@ namespace Horde
         void Awake()
         {
             Application.targetFrameRate = 60;
+            Application.runInBackground = true;
             QualitySettings.vSyncCount = 0;
             Screen.sleepTimeout = SleepTimeout.NeverSleep;
 
             Sprites.Init();
+            Models.Init();
             SpriteMat = Resources.Load<Material>("HordeSprite");
+            LitMat = MakeMaterial("Horde/Lit", "HordeLitMat");
+            GlowMat = MakeMaterial("Horde/Glow", "HordeGlowMat");
             SetUpCamera();
             BuildArena();
 
@@ -83,6 +98,8 @@ namespace Horde
             LoadProfile();
             ShowMenu();
             Hud.ShowWarning();
+            if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-hordeshot") >= 0)
+                StartCoroutine(CaptureRun());
         }
 
         public void StartRun()
@@ -107,7 +124,7 @@ namespace Horde
             camBase = Vector2.zero;
             trauma = 0f;
             Abilities.Grant(HeroKit.StartAbility(SelectedHero));
-            Cam.transform.position = new Vector3(0f, 0f, -10f);
+            Cam.transform.position = CamPos(Vector2.zero);
             SetState(GameState.Playing);
         }
 
@@ -126,7 +143,7 @@ namespace Horde
             float dt = Mathf.Min(Time.deltaTime, 0.05f);
             RunTime += dt;
 
-            Player.Tick(dt, Joystick.Read());
+            Player.Tick(dt, autoMove.sqrMagnitude > 0.01f ? autoMove : Joystick.Read());
             if (Joystick.ConsumeBlink()) Player.Blink();
             Portals.Tick(dt);
             Enemies.Tick(dt);
@@ -338,6 +355,38 @@ namespace Horde
             if (paused && State == GameState.Playing) SetState(GameState.Paused);
         }
 
+        // A tilted perspective camera looking down at the XY battlefield. The gameplay stays 2D;
+        // the models stand up out of it towards the lens.
+        // Build-verification hook: plays a run unattended and writes screenshots, so the
+        // 3D rendering can be checked without a phone in hand. Never runs in a shipped build
+        // unless the player is launched with -hordeshot.
+        System.Collections.IEnumerator CaptureRun()
+        {
+            yield return new WaitForSecondsRealtime(1.5f);
+            Hud.CloseWarning();
+            StartWithHero(HeroId.Ember);
+            string dir = System.Environment.GetEnvironmentVariable("HORDE_SHOT_DIR") ?? "/tmp";
+            float[] at = { 4f, 12f, 24f, 40f };
+            var move = new Vector2(0.6f, 0.4f).normalized;
+            for (int i = 0; i < at.Length; i++)
+            {
+                float until = at[i];
+                while (RunTime < until)
+                {
+                    autoMove = Quaternion.Euler(0f, 0f, Mathf.Sin(RunTime * 0.7f) * 70f) * move;
+                    // take the first offered upgrade so the run never stalls on a menu
+                    if (State == GameState.LevelUp || State == GameState.BossReward) Hud.AutoPick();
+                    yield return null;
+                }
+                ScreenCapture.CaptureScreenshot(dir + "/horde_shot_" + i + ".png");
+                yield return new WaitForSecondsRealtime(1.2f);
+            }
+            Application.Quit();
+        }
+
+        Vector2 autoMove;
+        public bool AutoPlay { get; private set; }
+
         void SetUpCamera()
         {
             Cam = Camera.main;
@@ -346,17 +395,59 @@ namespace Horde
                 var go = new GameObject("Main Camera") { tag = "MainCamera" };
                 Cam = go.AddComponent<Camera>();
             }
-            Cam.orthographic = true;
-            Cam.orthographicSize = 8.5f;
+            Cam.orthographic = false;
+            Cam.fieldOfView = CamFov;
+            Cam.nearClipPlane = 0.5f;
+            Cam.farClipPlane = 140f;
             Cam.clearFlags = CameraClearFlags.SolidColor;
             Cam.backgroundColor = new Color(0.035f, 0.04f, 0.07f);
-            Cam.transform.position = new Vector3(0f, 0f, -10f);
+            Cam.transform.rotation = Quaternion.Euler(CamPitch, 0f, 0f);
+            Cam.transform.position = CamPos(Vector2.zero);
             if (Cam.GetComponent<AudioListener>() == null) Cam.gameObject.AddComponent<AudioListener>();
+
+            // One hard key light from over the player's shoulder, plus the shader's sky fill.
+            var lightGo = new GameObject("KeyLight");
+            KeyLight = lightGo.AddComponent<Light>();
+            KeyLight.type = LightType.Directional;
+            KeyLight.color = new Color(1f, 0.94f, 0.85f);
+            KeyLight.intensity = 1.35f;
+            KeyLight.shadows = LightShadows.Hard;
+            KeyLight.shadowStrength = 0.55f;
+            KeyLight.shadowBias = 0.06f;
+            KeyLight.shadowNormalBias = 0.5f;
+            lightGo.transform.rotation = Quaternion.LookRotation(new Vector3(-0.42f, -0.55f, 1f).normalized, Vector3.up);
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.16f, 0.19f, 0.30f);
+            RenderSettings.fog = false;
+        }
+
+        /// <summary>Where the camera sits to frame a point on the arena floor.</summary>
+        Vector3 CamPos(Vector2 look)
+        {
+            float p = CamPitch * Mathf.Deg2Rad;
+            float dist = ViewHalfH / Mathf.Tan(CamFov * 0.5f * Mathf.Deg2Rad);
+            return new Vector3(look.x, look.y, 0f) + new Vector3(0f, Mathf.Sin(p), -Mathf.Cos(p)) * dist;
+        }
+
+        Material MakeMaterial(string shaderName, string name)
+        {
+            var sh = Shader.Find(shaderName);
+            if (sh == null) return null;
+            var m = new Material(sh) { name = name, enableInstancing = true };
+            return m;
+        }
+
+        /// <summary>A pooled 3D object drawn with the lit (or additive) material.</summary>
+        public Rig NewRig(string name, Mesh mesh, Color tint, Transform parent = null, bool glow = false, bool shadows = true)
+        {
+            var rig = new Rig(name, mesh, glow ? GlowMat : LitMat, parent, shadows && !glow);
+            rig.SetTint(tint, glow ? 1f : 0f);
+            return rig;
         }
 
         void FollowCamera(float dt)
         {
-            float halfH = Cam.orthographicSize, halfW = halfH * Cam.aspect;
+            float halfH = ViewHalfH, halfW = ViewHalfW;
             Vector2 target = Player.Pos;
             target.x = Mathf.Clamp(target.x, -ArenaHalfW + halfW, ArenaHalfW - halfW);
             target.y = Mathf.Clamp(target.y, -ArenaHalfH + halfH, ArenaHalfH - halfH);
@@ -365,11 +456,14 @@ namespace Horde
             float s = trauma * trauma * 0.35f;
             float sx = s > 0f ? Random.Range(-s, s) : 0f;
             float sy = s > 0f ? Random.Range(-s, s) : 0f;
-            Cam.transform.position = new Vector3(camBase.x + sx, camBase.y + sy, -10f);
+            Cam.transform.position = CamPos(new Vector2(camBase.x + sx, camBase.y + sy));
         }
 
         Vector2 camBase;
         float trauma;
+
+        /// <summary>The point on the arena floor the camera is looking at (not where it sits).</summary>
+        public Vector2 CamFocus => camBase;
 
         /// <summary>Adds screen shake; it stacks and fades out on its own.</summary>
         public void SnapCamera() => camBase = Player.Pos;
@@ -382,18 +476,35 @@ namespace Horde
             var floor = NewSprite("Floor", Sprites.Floor, Color.white, -20, root);
             floor.drawMode = SpriteDrawMode.Tiled;
             floor.size = new Vector2(ArenaHalfW * 2f, ArenaHalfH * 2f);
+            floor.transform.position = new Vector3(0f, 0f, 0.06f);   // just under the decals
+            BuildWalls(root);
             var grid = new Color(0.25f, 0.35f, 0.55f, 0.05f);
             for (float x = -ArenaHalfW; x <= ArenaHalfW + 0.01f; x += 3f)
                 Line(root, new Vector2(x, 0f), new Vector2(0.04f, ArenaHalfH * 2f), grid, -10);
             for (float y = -ArenaHalfH; y <= ArenaHalfH + 0.01f; y += 3f)
                 Line(root, new Vector2(0f, y), new Vector2(ArenaHalfW * 2f, 0.04f), grid, -10);
 
-            var wall = new Color(0.3f, 0.9f, 1f, 0.85f);
-            const float t = 0.16f;
-            Line(root, new Vector2(-ArenaHalfW, 0f), new Vector2(t, ArenaHalfH * 2f + t), wall, -5);
-            Line(root, new Vector2(ArenaHalfW, 0f), new Vector2(t, ArenaHalfH * 2f + t), wall, -5);
-            Line(root, new Vector2(0f, -ArenaHalfH), new Vector2(ArenaHalfW * 2f + t, t), wall, -5);
-            Line(root, new Vector2(0f, ArenaHalfH), new Vector2(ArenaHalfW * 2f + t, t), wall, -5);
+        }
+
+        // Real walls around the arena so the edge of the world reads in 3D.
+        void BuildWalls(Transform root)
+        {
+            var b = new MeshBuilder();
+            var stone = new Color(0.30f, 0.34f, 0.46f);
+            var cap = new Color(0.55f, 0.85f, 1f);
+            const float t = 0.7f, h = 1.7f;
+            float w = ArenaHalfW + t * 0.5f, d = ArenaHalfH + t * 0.5f;
+            // built in model space (Y up) and laid down with the same Stand rotation as everything else
+            b.Box(new Vector3(-w, h * 0.5f, 0f), new Vector3(t, h, d * 2f + t * 2f), stone, 0.7f);
+            b.Box(new Vector3(w, h * 0.5f, 0f), new Vector3(t, h, d * 2f + t * 2f), stone, 0.7f);
+            b.Box(new Vector3(0f, h * 0.5f, -d), new Vector3(w * 2f + t * 2f, h, t), stone, 0.7f);
+            b.Box(new Vector3(0f, h * 0.5f, d), new Vector3(w * 2f + t * 2f, h, t), stone, 0.7f);
+            b.Box(new Vector3(-w, h + 0.06f, 0f), new Vector3(t * 0.7f, 0.12f, d * 2f + t * 2f), cap);
+            b.Box(new Vector3(w, h + 0.06f, 0f), new Vector3(t * 0.7f, 0.12f, d * 2f + t * 2f), cap);
+            b.Box(new Vector3(0f, h + 0.06f, -d), new Vector3(w * 2f + t * 2f, 0.12f, t * 0.7f), cap);
+            b.Box(new Vector3(0f, h + 0.06f, d), new Vector3(w * 2f + t * 2f, 0.12f, t * 0.7f), cap);
+            var rig = NewRig("Walls", b.Build("Walls"), Color.white, root);
+            rig.Tr.rotation = Rig.Stand;
         }
 
         void Line(Transform parent, Vector2 center, Vector2 size, Color color, int order)

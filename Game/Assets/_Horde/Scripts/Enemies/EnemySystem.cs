@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Horde
 {
-    public enum EnemyKind : byte { Swarmer, Brute, Boss }
+    public enum EnemyKind : byte { Grunt, Runner, Hound, Spitter, Splitter, Mite, Brute, Boss }
 
     /// <summary>
     /// Every enemy lives in parallel arrays updated in one loop. Dead enemies are only flagged
@@ -11,7 +11,12 @@ namespace Horde
     /// </summary>
     public sealed class EnemySystem
     {
-        static readonly Color SwarmerColor = new Color(1f, 0.27f, 0.36f);
+        static readonly Color SwarmerColor = new Color(1f, 0.27f, 0.36f);   // Grunt
+        static readonly Color RunnerColor = new Color(1f, 0.55f, 0.25f);
+        static readonly Color HoundColor = new Color(0.95f, 0.78f, 0.35f);
+        static readonly Color SpitterColor = new Color(0.35f, 0.9f, 0.75f);
+        static readonly Color SplitterColor = new Color(0.6f, 1f, 0.35f);
+        static readonly Color MiteColor = new Color(0.8f, 1f, 0.6f);
         static readonly Color BruteColor = new Color(0.68f, 0.46f, 1f);
         static readonly Color SlowTint = new Color(0.55f, 0.8f, 1f);
         const float SlowFactor = 0.4f;
@@ -29,13 +34,16 @@ namespace Horde
         public readonly Vector2[] Pos;
         public readonly float[] Radius;
         public readonly float[] OrbitCooldown;
+        public readonly float[] WaveCooldown;
         public readonly bool[] Alive;
         readonly Vector2[] knock;
         readonly float[] hp, speed, contact, flash, slow;
         readonly float[] burn, burnDps, poison, poisonDps, oil, dotAcc, dotTick;
+        readonly float[] atkCd, face;   // spitter reload, drawn facing
         readonly EnemyKind[] kind;
-        readonly SpriteRenderer[] sr;
-        readonly Transform[] tr;
+        readonly Rig[] rig;              // one 3D model per enemy, one draw call each
+        readonly float[] anim;           // walk-cycle phase
+        BossRig bossRig;
         public readonly SpatialGrid Grid;
         float spawnBudget;
 
@@ -57,9 +65,9 @@ namespace Horde
         public int BossesKilled { get; private set; }
         public int BossTotal => BossTimes.Length;
         public float BossTime(int i) => BossTimes[i];
-        Vector2 bossDashDir, bossDashTarget;
-        float bossDashSpeed;
-        SpriteRenderer dashMarker;
+        Vector2 bossDashDir, bossDashTarget, bossAimDir;
+        float bossDashSpeed, bossWind, bossWindMax;
+        SpriteRenderer dashMarker, chargeBeam, chargeGlow;
         public bool BossAlive { get; private set; }
         public float BossHpFrac { get; private set; }
 
@@ -70,6 +78,7 @@ namespace Horde
             Pos = new Vector2[capacity];
             Radius = new float[capacity];
             OrbitCooldown = new float[capacity];
+            WaveCooldown = new float[capacity];
             Alive = new bool[capacity];
             knock = new Vector2[capacity];
             hp = new float[capacity];
@@ -84,31 +93,38 @@ namespace Horde
             oil = new float[capacity];
             dotAcc = new float[capacity];
             dotTick = new float[capacity];
+            atkCd = new float[capacity];
+            face = new float[capacity];
             kind = new EnemyKind[capacity];
-            sr = new SpriteRenderer[capacity];
-            tr = new Transform[capacity];
+            rig = new Rig[capacity];
+            anim = new float[capacity];
 
             var root = new GameObject("Enemies").transform;
             for (int i = 0; i < capacity; i++)
             {
-                sr[i] = g.NewSprite("Enemy", Sprites.Swarmer, SwarmerColor, 10, root);
-                tr[i] = sr[i].transform;
-                sr[i].enabled = false;
+                rig[i] = g.NewRig("Enemy", Models.Grunt, SwarmerColor, root);
+                rig[i].Enabled = false;
             }
+            bossRig = new BossRig(g);
             Grid = new SpatialGrid(Game.ArenaHalfW, Game.ArenaHalfH, 3f, 1.2f, capacity);
             bossMarker = g.NewSprite("BossLanding", Sprites.Ring, BossColor, 4, root);
             bossMarker.enabled = false;
-            dashMarker = g.NewSprite("BossChargeMark", Sprites.Ring, new Color(1f, 0.25f, 0.2f), 5, root);
-            dashMarker.enabled = false;
+            // The charge is told by the boss itself: a collapsing ring, a swelling glow and a
+            // spear of light along the direction it is about to hurl itself. No ground marker.
+            dashMarker = g.NewSprite("BossChargeRing", Sprites.Ring, new Color(1f, 0.25f, 0.2f), 14, root);
+            chargeBeam = g.NewSprite("BossChargeBeam", Sprites.Square, new Color(1f, 0.3f, 0.15f), 6, root);
+            chargeGlow = g.NewSprite("BossChargeGlow", Sprites.Glow, new Color(1f, 0.35f, 0.1f), 9, root);
+            dashMarker.enabled = chargeBeam.enabled = chargeGlow.enabled = false;
         }
 
         public void Reset()
         {
             for (int i = 0; i < Capacity; i++)
             {
-                sr[i].enabled = false;
+                rig[i].Enabled = false;
                 Alive[i] = false;
             }
+            bossRig.Show(false);
             Count = 0;
             spawnBudget = 0f;
             bossesSpawned = 0;
@@ -119,7 +135,7 @@ namespace Horde
             bossPointChosen = false;
             bossMarker.enabled = false;
             BossesKilled = 0;
-            dashMarker.enabled = false;
+            dashMarker.enabled = chargeBeam.enabled = chargeGlow.enabled = false;
             Grid.Clear();
         }
 
@@ -158,7 +174,7 @@ namespace Horde
                 }
                 if (until <= 0f)
                 {
-                    if (Count >= Capacity) { Alive[Count - 1] = false; sr[Count - 1].enabled = false; Count--; }
+                    if (Count >= Capacity) { Alive[Count - 1] = false; rig[Count - 1].Enabled = false; Count--; }
                     Spawn(t, true, NextBossPoint);
                     bossesSpawned++;
                     bossPointChosen = false;
@@ -206,23 +222,59 @@ namespace Horde
                 float rr = Radius[i] + Player.Radius;
                 if ((Pos[i] - target).sqrMagnitude < rr * rr && g.Player.Damage(contact[i]))
                     SlowAround(target, 2.4f, 1.8f);   // getting hit opens an escape route
-                tr[i].position = Pos[i];
+                // creatures turn to face where they are heading; the boss always faces the hero
+                Vector2 look = target - Pos[i];
+                if (look.sqrMagnitude > 0.0004f)
+                {
+                    float want = Mathf.Atan2(look.y, look.x) * Mathf.Rad2Deg;
+                    face[i] = Mathf.LerpAngle(face[i], want, 1f - Mathf.Exp(-9f * dt));
+                }
+                if (kind[i] == EnemyKind.Spitter) TickSpitter(i, dt, target);
+                if (kind[i] != EnemyKind.Boss) Animate(i, dt);
                 bool hadStatus = slow[i] > 0f || burn[i] > 0f || poison[i] > 0f || oil[i] > 0f;
+                if (WaveCooldown[i] > 0f) WaveCooldown[i] -= dt;
                 if (slow[i] > 0f) slow[i] -= dt;
                 if (oil[i] > 0f) oil[i] -= dt;
                 if (burn[i] > 0f || poison[i] > 0f) TickDot(i, dt);
                 if (!Alive[i]) continue;
-                if (flash[i] > 0f)
-                {
-                    flash[i] -= dt * 6f;
-                    sr[i].color = Color.Lerp(TintedColor(i), Color.white, Mathf.Clamp01(flash[i]));
-                }
-                else if (hadStatus)
-                {
-                    sr[i].color = TintedColor(i);
-                }
+                if (flash[i] > 0f) flash[i] -= dt * 6f;
+                if (kind[i] != EnemyKind.Boss)
+                    rig[i].SetTint(flash[i] > 0f ? Color.Lerp(TintedColor(i), Color.white, Mathf.Clamp01(flash[i])) : TintedColor(i),
+                                   flash[i] > 0f ? Mathf.Clamp01(flash[i]) * 0.8f : 0f);
             }
             BossAlive = bossSeen;
+        }
+
+        // Every creature walks: a bob on each footfall, a forward lean, a roll into the turn,
+        // and a squash when something hits it. One transform, no animation clips.
+        void Animate(int i, float dt)
+        {
+            float sp = speed[i] * (slow[i] > 0f ? SlowFactor : 1f);
+            anim[i] += dt * (2.2f + sp * 3.4f);
+            float step = Mathf.Sin(anim[i]);
+            float hit = Mathf.Clamp01(flash[i]);
+            float size = Radius[i] * VisualScale(kind[i]);
+
+            float bob = Mathf.Abs(Mathf.Cos(anim[i])) * 0.09f * size;
+            float lean = 9f + step * 7f + hit * -14f;          // recoils when struck
+            float roll = step * (kind[i] == EnemyKind.Hound ? 4f : 8f);
+            var scale = new Vector3(size * (1f + hit * 0.22f), size * (1f - hit * 0.16f), size * (1f + hit * 0.22f));
+            rig[i].Place(Pos[i], face[i], scale, bob, lean, roll);
+        }
+
+        // Spitters keep their distance and lob acid at you.
+        void TickSpitter(int i, float dt, Vector2 target)
+        {
+            atkCd[i] -= dt * (slow[i] > 0f ? 0.4f : 1f);
+            if (atkCd[i] > 0f) return;
+            Vector2 d = target - Pos[i];
+            float dist = d.magnitude;
+            if (dist > 13f || dist < 1.2f) { atkCd[i] = 0.4f; return; }
+            atkCd[i] = 2.4f;
+            Vector2 dir = d / dist;
+            g.BossBullets.Fire(Pos[i] + dir * (Radius[i] + 0.2f), dir, 7.5f, 9f * (1f + g.RunTime / 240f));
+            g.Fx.Burst(Pos[i] + dir * 0.4f, SpitterColor, 4, 3f);
+            g.Sfx.Play(Sound.Shoot, 0.25f);
         }
 
         public void Hit(int i, float damage, Vector2 from, float knockback, bool showNumber = true)
@@ -237,6 +289,23 @@ namespace Horde
             g.Fx.Burst(Pos[i], BaseColor(i), 3, 4f);
             g.Sfx.Play(Sound.Hit);
             if (hp[i] <= 0f) Kill(i);
+        }
+
+        /// <summary>Continuous damage with no number spam - used by Void Vortex.</summary>
+        public void Grind(int i, float damage)
+        {
+            if (!Alive[i]) return;
+            hp[i] -= damage;
+            flash[i] = Mathf.Max(flash[i], 0.3f);
+            dotAcc[i] += damage;
+            if (dotAcc[i] > 0f && Random.value < 0.04f) { g.Numbers.Damage(Pos[i], dotAcc[i]); dotAcc[i] = 0f; }
+            if (hp[i] <= 0f) Kill(i);
+        }
+
+        /// <summary>Shove an enemy directly (Void Vortex's pull); bosses barely budge.</summary>
+        public void Drag(int i, Vector2 delta)
+        {
+            if (Alive[i]) Pos[i] += delta * KnockMul(i);
         }
 
         public int Nearest(Vector2 p, float maxDist, int exclude = -1)
@@ -255,24 +324,50 @@ namespace Horde
         void Kill(int i)
         {
             Alive[i] = false;
-            sr[i].enabled = false;
+            rig[i].Enabled = false;
             g.Kills++;
-            if (kind[i] == EnemyKind.Boss) { KillBoss(i); return; }
-            bool brute = kind[i] == EnemyKind.Brute;
-            g.Xp.Drop(Pos[i], brute ? 10f : 2f);   // fewer, harder kills still level you up
-            g.Fx.Burst(Pos[i], BaseColor(i), brute ? 16 : 8, 6f);
-            g.Fx.Pop(Pos[i], BaseColor(i), Radius[i] * 4f);
+            if (kind[i] == EnemyKind.Boss) { bossRig.Show(false); KillBoss(i); return; }
+            EnemyKind k = kind[i];
+            bool big = k == EnemyKind.Brute || k == EnemyKind.Splitter;
+            float xp = k switch
+            {
+                EnemyKind.Brute => 10f,
+                EnemyKind.Splitter => 5f,
+                EnemyKind.Spitter => 4f,
+                EnemyKind.Hound => 3f,
+                EnemyKind.Runner => 2.5f,
+                EnemyKind.Mite => 1f,
+                _ => 2f
+            };
+            Vector2 at = Pos[i];
+            g.Xp.Drop(at, xp);   // fewer, harder kills still level you up
+            g.Fx.Burst(at, BaseColor(i), big ? 16 : 8, 6f);
+            g.Fx.Pop(at, BaseColor(i), Radius[i] * 4f);
             g.Sfx.Play(Sound.Kill);
-            if (brute) g.Shake(0.18f);
-            g.Pickups.MaybeDrop(Pos[i], brute);
+            if (big) g.Shake(0.18f);
+            g.Pickups.MaybeDrop(at, k == EnemyKind.Brute);
+            if (k == EnemyKind.Splitter) SplitInto(at, 3, EnemyKind.Mite);
+            else if (k == EnemyKind.Mite && Random.value < 0.22f) SplitInto(at, 2, EnemyKind.Mite);   // a colony that fights back
         }
 
-        void Spawn(float t, bool boss = false, Vector2? at = null)
+        // A popped Splitter scatters a colony: clear them fast or they swarm you.
+        void SplitInto(Vector2 at, int n, EnemyKind k)
+        {
+            float t = g.RunTime;
+            for (int c = 0; c < n && Count < Capacity; c++)
+            {
+                float a = Random.value * Mathf.PI * 2f;
+                Spawn(t, false, at + new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * (0.45f + Random.value * 0.3f), k);
+            }
+            g.Fx.Pop(at, SplitterColor, 2.2f);
+        }
+
+        void Spawn(float t, bool boss = false, Vector2? at = null, EnemyKind? force = null)
         {
             if (Count >= Capacity) return;
 
-            float halfH = g.Cam.orthographicSize, halfW = halfH * g.Cam.aspect;
-            Vector2 cam = g.Cam.transform.position;
+            float halfH = g.ViewHalfH, halfW = g.ViewHalfW;
+            Vector2 cam = g.CamFocus;
             float ring = Mathf.Sqrt(halfW * halfW + halfH * halfH) + 1.2f;
             Vector2 p = g.Player.Pos;
             for (int tries = 0; tries < 8; tries++)
@@ -286,21 +381,33 @@ namespace Horde
             if (at.HasValue) p = at.Value;
 
             float scale = 1f + t / 60f * 0.2f + Mathf.Max(0f, t - 90f) / 60f * 0.7f + Mathf.Max(0f, t - 540f) / 60f * 1.2f;
-            bool brute = !boss && t > 75f && Random.value < Mathf.Min(0.2f, 0.05f + t / 1200f);
+            EnemyKind k = boss ? EnemyKind.Boss : force ?? PickKind(t);
 
             int i = Count++;
-            kind[i] = boss ? EnemyKind.Boss : brute ? EnemyKind.Brute : EnemyKind.Swarmer;
+            kind[i] = k;
             Pos[i] = p;
             knock[i] = Vector2.zero;
-            Radius[i] = brute ? 0.55f : 0.28f;
-            hp[i] = (brute ? 160f : 23f) * scale;   // Spark Lv1 can't one-shot a swarmer, Lv2 can - until time outgrows it
-            speed[i] = brute ? 1.2f : 2.1f + Random.value * 0.35f;
-            contact[i] = (brute ? 18f : 8f) * (1f + t / 60f * 0.12f);
+            // Grunt HP is the yardstick the whole kit is balanced against: Spark Lv1 can't
+            // one-shot one, Lv2 can - until run time outgrows it.
+            switch (k)
+            {
+                case EnemyKind.Runner:   Radius[i] = 0.26f; hp[i] = 16f;  speed[i] = 3.5f + Random.value * 0.4f; contact[i] = 7f;  break;
+                case EnemyKind.Hound:    Radius[i] = 0.33f; hp[i] = 26f;  speed[i] = 3.0f + Random.value * 0.3f; contact[i] = 10f; break;
+                case EnemyKind.Spitter:  Radius[i] = 0.36f; hp[i] = 34f;  speed[i] = 1.5f;                       contact[i] = 9f;  break;
+                case EnemyKind.Splitter: Radius[i] = 0.46f; hp[i] = 58f;  speed[i] = 1.7f;                       contact[i] = 11f; break;
+                case EnemyKind.Mite:     Radius[i] = 0.19f; hp[i] = 11f;  speed[i] = 3.3f + Random.value * 0.5f; contact[i] = 5f;  break;
+                case EnemyKind.Brute:    Radius[i] = 0.55f; hp[i] = 160f; speed[i] = 1.2f;                       contact[i] = 18f; break;
+                default:                 Radius[i] = 0.30f; hp[i] = 23f;  speed[i] = 2.1f + Random.value * 0.35f; contact[i] = 8f; break;
+            }
+            hp[i] *= scale;
+            contact[i] *= 1f + t / 60f * 0.12f;
+            atkCd[i] = 1.2f + Random.value;
+            face[i] = 0f;
             flash[i] = 0f;
             slow[i] = 0f;
             burn[i] = burnDps[i] = poison[i] = poisonDps[i] = oil[i] = dotAcc[i] = 0f;
             dotTick[i] = 0.5f;
-            OrbitCooldown[i] = 0f;
+            OrbitCooldown[i] = WaveCooldown[i] = 0f;
             Alive[i] = true;
 
             if (boss)
@@ -318,12 +425,46 @@ namespace Horde
                 bossRageWarned = false;
             }
 
-            sr[i].enabled = true;
-            sr[i].sprite = boss ? Sprites.Boss : brute ? Sprites.Brute : Sprites.Swarmer;
-            sr[i].color = BaseColor(i);
-            tr[i].localScale = Vector3.one * (Radius[i] * 2.2f);
-            tr[i].position = p;
+            anim[i] = Random.value * 10f;
+            bool isBoss = kind[i] == EnemyKind.Boss;
+            rig[i].Enabled = !isBoss;                       // the boss is drawn by its own rig
+            rig[i].Mesh = KindMesh(kind[i]);
+            rig[i].Invalidate();
+            rig[i].SetTint(BaseColor(i));
+            rig[i].Place(p, 90f, Radius[i] * VisualScale(kind[i]));
+            if (isBoss) bossRig.Show(true);
         }
+
+        // The horde changes shape as the run goes on: grunts, then runners and hounds, then
+        // spitters that shoot and splitters that leave a colony behind when they pop.
+        EnemyKind PickKind(float t)
+        {
+            float runner = t > 25f ? Mathf.Min(0.30f, 0.08f + (t - 25f) / 900f) : 0f;
+            float hound = t > 60f ? Mathf.Min(0.24f, 0.06f + (t - 60f) / 1100f) : 0f;
+            float brute = t > 75f ? Mathf.Min(0.18f, 0.04f + (t - 75f) / 1400f) : 0f;
+            float splitter = t > 110f ? Mathf.Min(0.18f, 0.05f + (t - 110f) / 1300f) : 0f;
+            float spitter = t > 150f ? Mathf.Min(0.14f, 0.04f + (t - 150f) / 1600f) : 0f;
+            float r = Random.value;
+            if ((r -= runner) < 0f) return EnemyKind.Runner;
+            if ((r -= hound) < 0f) return EnemyKind.Hound;
+            if ((r -= brute) < 0f) return EnemyKind.Brute;
+            if ((r -= splitter) < 0f) return EnemyKind.Splitter;
+            if ((r -= spitter) < 0f) return EnemyKind.Spitter;
+            return EnemyKind.Grunt;
+        }
+
+        // World size of one model unit, per creature: models are roughly 1 unit tall.
+        static float VisualScale(EnemyKind k) => k switch
+        {
+            EnemyKind.Boss => 2.3f,
+            EnemyKind.Brute => 2.6f,
+            EnemyKind.Hound => 3.8f,
+            EnemyKind.Runner => 4.3f,
+            EnemyKind.Spitter => 3.2f,
+            EnemyKind.Splitter => 3.0f,
+            EnemyKind.Mite => 4.2f,
+            _ => 4.0f
+        };
 
         // Push overlapping enemies apart so the horde reads as a crowd instead of a single stack.
         void Separate()
@@ -356,7 +497,7 @@ namespace Horde
             while (i < Count)
             {
                 if (Alive[i]) { i++; continue; }
-                sr[i].enabled = false;
+                rig[i].Enabled = false;
                 int last = Count - 1;
                 if (i != last) Swap(i, last);
                 Count--;
@@ -368,6 +509,7 @@ namespace Horde
             (Pos[a], Pos[b]) = (Pos[b], Pos[a]);
             (Radius[a], Radius[b]) = (Radius[b], Radius[a]);
             (OrbitCooldown[a], OrbitCooldown[b]) = (OrbitCooldown[b], OrbitCooldown[a]);
+            (WaveCooldown[a], WaveCooldown[b]) = (WaveCooldown[b], WaveCooldown[a]);
             (Alive[a], Alive[b]) = (Alive[b], Alive[a]);
             (knock[a], knock[b]) = (knock[b], knock[a]);
             (hp[a], hp[b]) = (hp[b], hp[a]);
@@ -382,13 +524,48 @@ namespace Horde
             (oil[a], oil[b]) = (oil[b], oil[a]);
             (dotAcc[a], dotAcc[b]) = (dotAcc[b], dotAcc[a]);
             (dotTick[a], dotTick[b]) = (dotTick[b], dotTick[a]);
+            (atkCd[a], atkCd[b]) = (atkCd[b], atkCd[a]);
+            (face[a], face[b]) = (face[b], face[a]);
             (kind[a], kind[b]) = (kind[b], kind[a]);
-            (sr[a], sr[b]) = (sr[b], sr[a]);
-            (tr[a], tr[b]) = (tr[b], tr[a]);
+            (rig[a], rig[b]) = (rig[b], rig[a]);
+            (anim[a], anim[b]) = (anim[b], anim[a]);
         }
 
-        Color BaseColor(int i) => kind[i] == EnemyKind.Boss ? BossColor : kind[i] == EnemyKind.Brute ? BruteColor : SwarmerColor;
-        float KnockMul(int i) => kind[i] == EnemyKind.Boss ? 0.03f : kind[i] == EnemyKind.Brute ? 0.3f : 1f;
+        static Color KindColor(EnemyKind k) => k switch
+        {
+            EnemyKind.Boss => BossColor,
+            EnemyKind.Brute => BruteColor,
+            EnemyKind.Runner => RunnerColor,
+            EnemyKind.Hound => HoundColor,
+            EnemyKind.Spitter => SpitterColor,
+            EnemyKind.Splitter => SplitterColor,
+            EnemyKind.Mite => MiteColor,
+            _ => SwarmerColor
+        };
+
+        static Mesh KindMesh(EnemyKind k) => k switch
+        {
+            EnemyKind.Boss => Models.DemonBody,
+            EnemyKind.Brute => Models.Ogre,
+            EnemyKind.Runner => Models.Runner,
+            EnemyKind.Hound => Models.Hound,
+            EnemyKind.Spitter => Models.Spitter,
+            EnemyKind.Splitter => Models.Splitter,
+            EnemyKind.Mite => Models.Mite,
+            _ => Models.Grunt
+        };
+
+        // Tints are pulled towards white so the baked shading and the key light still read
+        // on a model instead of drowning in flat colour.
+        Color BaseColor(int i) => Color.Lerp(KindColor(kind[i]), Color.white, 0.28f);
+        float KnockMul(int i) => kind[i] switch
+        {
+            EnemyKind.Boss => 0.03f,
+            EnemyKind.Brute => 0.3f,
+            EnemyKind.Splitter => 0.45f,
+            EnemyKind.Mite => 1.4f,
+            _ => 1f
+        };
 
         public void Slow(int i, float seconds)
         {
@@ -417,7 +594,7 @@ namespace Horde
         {
             int b = -1;
             for (int i = 0; i < Count; i++) if (kind[i] == EnemyKind.Boss && Alive[i]) { b = i; break; }
-            if (b < 0) { dashMarker.enabled = false; return; }
+            if (b < 0) { dashMarker.enabled = chargeBeam.enabled = chargeGlow.enabled = false; return; }
 
             // Dodging the fight doesn't work: a living boss hits harder, moves faster and attacks more
             // often every second. Around 2-3 minutes in, one contact is lethal.
@@ -431,14 +608,7 @@ namespace Horde
                 g.Hud.Banner("THE BOSS IS ENRAGING - KILL IT!", new Color(1f, 0.3f, 0.3f));
                 g.Sfx.Play(Sound.BossWarn, 0f);
             }
-            bool telegraph = bossPhase == 1 || bossPhase == 2;   // red ring where the charge will land
-            dashMarker.enabled = telegraph;
-            if (telegraph)
-            {
-                float pulse = 0.5f + 0.5f * Mathf.Sin(t * 25f);
-                dashMarker.transform.localScale = Vector3.one * (Radius[b] * 2.4f + pulse * 0.4f);
-                dashMarker.color = new Color(1f, 0.25f, 0.2f, 0.45f + 0.45f * pulse);
-            }
+            TickChargeTell(b, dt, t);
             bool enraged = hp[b] < bossMaxHp * 0.5f;
             bossTimer -= dt * (enraged ? 1.6f : 1f) * Mathf.Min(2f, 1f + bossAge / 90f);
             if (bossTimer > 0f) return;
@@ -453,7 +623,8 @@ namespace Horde
                     {
                         bossDashesLeft = tier >= 3 ? 3 : tier >= 1 ? 2 : 1;
                         bossPhase = 1;
-                        bossTimer = 0.7f;
+                        bossTimer = bossWindMax = 0.85f;
+                        bossWind = 0f;
                         LockCharge(b);
                     }
                     else if (roll == 1) { Volley(b, tier); bossPhase = 3; bossTimer = 0.8f; }
@@ -462,10 +633,12 @@ namespace Horde
                 case 1:
                     bossPhase = 2;
                     bossTimer = 0.45f;
+                    g.Shake(0.3f);
+                    g.Sfx.Play(Sound.Boom, 0.1f);
                     bossDashSpeed = Mathf.Max(speed[b] * 5f, (bossDashTarget - Pos[b]).magnitude / 0.4f);
                     break;
                 case 2:
-                    if (--bossDashesLeft > 0) { bossPhase = 1; bossTimer = 0.4f; LockCharge(b); }
+                    if (--bossDashesLeft > 0) { bossPhase = 1; bossTimer = bossWindMax = 0.55f; bossWind = 0f; LockCharge(b); }
                     else { bossPhase = 0; bossTimer = rest; }
                     break;
                 default:
@@ -473,6 +646,59 @@ namespace Horde
                     bossTimer = rest;
                     break;
             }
+        }
+
+        // Wind-up you can read without looking at the floor: the boss rears back, a ring
+        // slams shut on it, and a spear of light shows exactly where it is about to go.
+        void TickChargeTell(int b, float dt, float t)
+        {
+            bool winding = bossPhase == 1, dashing = bossPhase == 2;
+            dashMarker.enabled = chargeGlow.enabled = winding;
+            chargeBeam.enabled = winding || dashing;
+            if (winding) bossWind += dt;
+            float windK = bossWindMax > 0f ? Mathf.Clamp01(bossWind / bossWindMax) : 1f;
+            float ang = Mathf.Atan2(bossAimDir.y, bossAimDir.x) * Mathf.Rad2Deg;
+            float bossSpeed = bossPhase == 2 ? 6f : speed[b];
+            Color bossTint = flash[b] > 0f ? Color.Lerp(TintedColor(b), Color.white, Mathf.Clamp01(flash[b])) : TintedColor(b);
+            bossRig.Place(Pos[b], bossPhase == 0 || bossPhase == 3 ? face[b] : ang,
+                          Radius[b] * VisualScale(EnemyKind.Boss), dt, bossSpeed, bossPhase,
+                          windK, bossTint, Mathf.Clamp01(flash[b]) * 0.8f + (winding ? windK * 0.5f : 0f));
+
+            if (winding)
+            {
+                float k = windK;
+                float pulse = 0.5f + 0.5f * Mathf.Sin(t * 30f);
+
+                dashMarker.transform.position = Pos[b];
+                dashMarker.transform.localScale = Vector3.one * (Radius[b] * 2f * Mathf.Lerp(3.4f, 1.15f, k * k));
+                dashMarker.color = new Color(1f, 0.28f, 0.16f, 0.35f + 0.6f * k);
+
+                chargeGlow.transform.position = Pos[b];
+                chargeGlow.transform.localScale = Vector3.one * (Radius[b] * 5f * (0.8f + 0.5f * k));
+                chargeGlow.color = new Color(1f, 0.35f, 0.1f, (0.2f + 0.45f * k) * (0.7f + 0.3f * pulse));
+
+                if (Random.value < dt * 30f)
+                    g.Fx.Burst(Pos[b] + Random.insideUnitCircle * Radius[b] * 1.4f, new Color(1f, 0.4f, 0.12f), 2, 5f);
+
+                float len = Mathf.Lerp(1.5f, 9f, k);
+                Beam(Pos[b], bossAimDir, len, Radius[b] * (1.1f + 0.5f * k), 0.25f + 0.55f * k);
+            }
+            else if (dashing)
+            {
+                Beam(Pos[b] - bossAimDir * 4f, bossAimDir, 8f, Radius[b] * 1.6f, 0.4f);
+                if (Random.value < dt * 60f)
+                    g.Fx.Burst(Pos[b] - bossAimDir * Radius[b], new Color(1f, 0.55f, 0.2f), 3, 7f);
+            }
+            else bossWind = 0f;
+        }
+
+        void Beam(Vector2 from, Vector2 dir, float len, float width, float alpha)
+        {
+            var trm = chargeBeam.transform;
+            trm.position = from + dir * (len * 0.5f);
+            trm.rotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg);
+            trm.localScale = new Vector3(len, width, 1f);
+            chargeBeam.color = new Color(1f, 0.35f, 0.15f, alpha);
         }
 
         void Volley(int b, int tier)
@@ -505,7 +731,10 @@ namespace Horde
         void LockCharge(int b)
         {
             bossDashTarget = g.Player.Pos;   // fixed the moment the wind-up starts
-            dashMarker.transform.position = bossDashTarget;
+            Vector2 d = bossDashTarget - Pos[b];
+            bossAimDir = d.sqrMagnitude > 1e-4f ? d.normalized : Vector2.right;
+            g.Sfx.Play(Sound.BossWarn, 0.15f);
+            g.Shake(0.15f);
         }
 
         Vector2 PickBossPoint()

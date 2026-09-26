@@ -6,7 +6,7 @@ namespace Horde
     /// Placeholder art generated at startup, so the prototype needs no imported assets.
     /// Every sprite is exactly 1 world unit wide; scale transforms to size them.
     /// </summary>
-    public static class Sprites
+    public static partial class Sprites
     {
         public static Sprite Circle { get; private set; }
         public static Sprite Ring { get; private set; }
@@ -64,6 +64,7 @@ namespace Horde
             IconBomb = Make(96, IconBombA);
             JoyBase = Make(160, JoyBaseA);
             JoyKnob = MakeRGBA(128, JoyKnobPx);
+            InitArt();
         }
 
         static float Edge(float signedDistance) => Mathf.Clamp01(signedDistance / 0.02f + 0.5f);

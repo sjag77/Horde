@@ -13,8 +13,8 @@ namespace Horde
         int count;
         readonly Vector2[] pos = new Vector2[Cap], vel = new Vector2[Cap];
         readonly float[] life = new float[Cap], dmg = new float[Cap];
-        readonly SpriteRenderer[] glow = new SpriteRenderer[Cap], core = new SpriteRenderer[Cap];
-        readonly Transform[] glowTr = new Transform[Cap], coreTr = new Transform[Cap];
+        readonly Rig[] glow = new Rig[Cap], core = new Rig[Cap];
+        readonly float[] spin = new float[Cap];
 
         public BossBullets(Game g)
         {
@@ -22,19 +22,15 @@ namespace Horde
             var root = new GameObject("BossBullets").transform;
             for (int i = 0; i < Cap; i++)
             {
-                glow[i] = g.NewSprite("BulletGlow", Sprites.Glow, HotColor, 16, root);
-                core[i] = g.NewSprite("Bullet", Sprites.Circle, CoreColor, 17, root);
-                glowTr[i] = glow[i].transform;
-                coreTr[i] = core[i].transform;
-                glowTr[i].localScale = Vector3.one * 1.0f;
-                coreTr[i].localScale = Vector3.one * 0.32f;
-                glow[i].enabled = core[i].enabled = false;
+                glow[i] = g.NewRig("BulletGlow", Models.Sphere1, HotColor, root, true);
+                core[i] = g.NewRig("Bullet", Models.Sphere1, CoreColor, root, true);
+                glow[i].Enabled = core[i].Enabled = false;
             }
         }
 
         public void Reset()
         {
-            for (int i = 0; i < Cap; i++) glow[i].enabled = core[i].enabled = false;
+            for (int i = 0; i < Cap; i++) glow[i].Enabled = core[i].Enabled = false;
             count = 0;
         }
 
@@ -46,8 +42,12 @@ namespace Horde
             vel[i] = dir.normalized * speed;
             life[i] = 4.5f;
             dmg[i] = damage;
-            glow[i].enabled = core[i].enabled = true;
-            glowTr[i].position = coreTr[i].position = at;
+            spin[i] = Random.value * 360f;
+            glow[i].Enabled = core[i].Enabled = true;
+            glow[i].Invalidate(); core[i].Invalidate();
+            glow[i].SetTint(HotColor, 1.6f);
+            core[i].SetTint(CoreColor, 2.2f);
+            Draw(i);
         }
 
         public void Tick(float dt)
@@ -67,13 +67,22 @@ namespace Horde
                     dead = true;
                 }
                 if (dead) { Remove(i); i--; continue; }
-                glowTr[i].position = coreTr[i].position = pos[i];
+                spin[i] += dt * 260f;
+                Draw(i);
             }
+        }
+
+        // A spinning hot core inside a soft shell, flying at chest height.
+        void Draw(int i)
+        {
+            float pulse = 1f + 0.12f * Mathf.Sin(spin[i] * 0.2f);
+            glow[i].Place(pos[i], spin[i], Vector3.one * (0.52f * pulse), 0.45f);
+            core[i].Place(pos[i], -spin[i] * 1.6f, Vector3.one * 0.26f, 0.45f);
         }
 
         void Remove(int i)
         {
-            glow[i].enabled = core[i].enabled = false;
+            glow[i].Enabled = core[i].Enabled = false;
             int last = --count;
             if (i == last) return;
             (pos[i], pos[last]) = (pos[last], pos[i]);
@@ -82,8 +91,7 @@ namespace Horde
             (dmg[i], dmg[last]) = (dmg[last], dmg[i]);
             (glow[i], glow[last]) = (glow[last], glow[i]);
             (core[i], core[last]) = (core[last], core[i]);
-            (glowTr[i], glowTr[last]) = (glowTr[last], glowTr[i]);
-            (coreTr[i], coreTr[last]) = (coreTr[last], coreTr[i]);
+            (spin[i], spin[last]) = (spin[last], spin[i]);
         }
     }
 }

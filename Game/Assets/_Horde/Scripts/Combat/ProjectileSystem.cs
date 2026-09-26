@@ -13,8 +13,7 @@ namespace Horde
         readonly Vector2[] pos, vel;
         readonly float[] life, damage, radius;
         readonly int[] bounces, lastHit;
-        readonly SpriteRenderer[] sr;
-        readonly Transform[] tr;
+        readonly Rig[] rig;
 
         public ProjectileSystem(Game g, int capacity)
         {
@@ -27,21 +26,19 @@ namespace Horde
             radius = new float[capacity];
             bounces = new int[capacity];
             lastHit = new int[capacity];
-            sr = new SpriteRenderer[capacity];
-            tr = new Transform[capacity];
+            rig = new Rig[capacity];
 
             var root = new GameObject("Projectiles").transform;
             for (int i = 0; i < capacity; i++)
             {
-                sr[i] = g.NewSprite("Bolt", Sprites.Circle, BoltColor, 15, root);
-                tr[i] = sr[i].transform;
-                sr[i].enabled = false;
+                rig[i] = g.NewRig("Bolt", Models.BoltMesh, BoltColor, root, true);
+                rig[i].Enabled = false;
             }
         }
 
         public void Reset()
         {
-            for (int i = 0; i < capacity; i++) sr[i].enabled = false;
+            for (int i = 0; i < capacity; i++) rig[i].Enabled = false;
             count = 0;
         }
 
@@ -56,9 +53,10 @@ namespace Horde
             radius[i] = r;
             bounces[i] = bounce;
             lastHit[i] = -1;
-            sr[i].enabled = true;
-            tr[i].localScale = Vector3.one * (r * 2.4f);
-            tr[i].position = from;
+            rig[i].Enabled = true;
+            rig[i].Invalidate();
+            rig[i].SetTint(BoltColor, 1.8f);
+            Draw(i);
         }
 
         public void Tick(float dt)
@@ -95,8 +93,17 @@ namespace Horde
                     i--;               // the swapped-in projectile still needs this frame's update
                     continue;
                 }
-                tr[i].position = pos[i];
+                Draw(i);
+                if (Random.value < 0.35f) g.Fx.Burst(pos[i], BoltColor, 1, 1.2f);   // glowing trail
             }
+        }
+
+        // Bolts fly nose-first at chest height, stretched along their travel.
+        void Draw(int i)
+        {
+            float deg = Mathf.Atan2(vel[i].y, vel[i].x) * Mathf.Rad2Deg;
+            float s = radius[i] * 3.4f;
+            rig[i].Place(pos[i], deg, new Vector3(s, s, s * 1.7f), 0.42f);
         }
 
         int FindHit(int i, EnemySystem enemies)
@@ -119,7 +126,7 @@ namespace Horde
 
         void Remove(int i)
         {
-            sr[i].enabled = false;
+            rig[i].Enabled = false;
             int last = count - 1;
             if (i != last)
             {
@@ -130,8 +137,7 @@ namespace Horde
                 (radius[i], radius[last]) = (radius[last], radius[i]);
                 (bounces[i], bounces[last]) = (bounces[last], bounces[i]);
                 (lastHit[i], lastHit[last]) = (lastHit[last], lastHit[i]);
-                (sr[i], sr[last]) = (sr[last], sr[i]);
-                (tr[i], tr[last]) = (tr[last], tr[i]);
+                (rig[i], rig[last]) = (rig[last], rig[i]);
             }
             count--;
         }
