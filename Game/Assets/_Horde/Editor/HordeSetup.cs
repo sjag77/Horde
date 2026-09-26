@@ -102,13 +102,13 @@ public static class HordeSetup
         var android = NamedBuildTarget.Android;
         PlayerSettings.companyName = "Horde Studio";
         PlayerSettings.productName = "HORDE";
-        PlayerSettings.bundleVersion = "0.1.0";
+        PlayerSettings.bundleVersion = "0.2.0";
         PlayerSettings.SetApplicationIdentifier(android, "com.hordestudio.horde");
         PlayerSettings.SetScriptingBackend(android, ScriptingImplementation.IL2CPP);
         PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;   // Google Play requires 64-bit
         PlayerSettings.Android.minSdkVersion = (AndroidSdkVersions)25;            // Unity 6.3 minimum: Android 7.1
         PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevelAuto;
-        PlayerSettings.Android.bundleVersionCode = 3;
+        PlayerSettings.Android.bundleVersionCode = 4;
         PlayerSettings.defaultInterfaceOrientation = UIOrientation.Portrait;
         PlayerSettings.colorSpace = ColorSpace.Linear;
         PlayerSettings.gpuSkinning = false;

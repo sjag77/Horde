@@ -32,9 +32,13 @@ namespace Horde
             return m;
         }
 
+        // Colours are authored the way they should look on screen (sRGB). The project renders
+        // in linear space, so they are converted once here instead of washing out in the shader.
+        static readonly bool Linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
+
         void Push(Vector3 p, Vector3 n, Color c)
         {
-            verts.Add(p); norms.Add(n); cols.Add(c);
+            verts.Add(p); norms.Add(n); cols.Add(Linear ? c.linear : c);
         }
 
         void Quad(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Color col)

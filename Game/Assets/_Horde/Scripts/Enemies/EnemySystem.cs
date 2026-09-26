@@ -239,8 +239,7 @@ namespace Horde
                 if (!Alive[i]) continue;
                 if (flash[i] > 0f) flash[i] -= dt * 6f;
                 if (kind[i] != EnemyKind.Boss)
-                    rig[i].SetTint(flash[i] > 0f ? Color.Lerp(TintedColor(i), Color.white, Mathf.Clamp01(flash[i])) : TintedColor(i),
-                                   flash[i] > 0f ? Mathf.Clamp01(flash[i]) * 0.8f : 0f);
+                    rig[i].SetLook(RenderTint(i), 0f, Mathf.Clamp01(flash[i]) * 0.85f);
             }
             BossAlive = bossSeen;
         }
@@ -430,7 +429,7 @@ namespace Horde
             rig[i].Enabled = !isBoss;                       // the boss is drawn by its own rig
             rig[i].Mesh = KindMesh(kind[i]);
             rig[i].Invalidate();
-            rig[i].SetTint(BaseColor(i));
+            rig[i].SetLook(Color.white, 0f, 0f);
             rig[i].Place(p, 90f, Radius[i] * VisualScale(kind[i]));
             if (isBoss) bossRig.Show(true);
         }
@@ -555,9 +554,20 @@ namespace Horde
             _ => Models.Grunt
         };
 
-        // Tints are pulled towards white so the baked shading and the key light still read
-        // on a model instead of drowning in flat colour.
-        Color BaseColor(int i) => Color.Lerp(KindColor(kind[i]), Color.white, 0.28f);
+        // Kind colours are only used for hit sparks and death bursts now: the models carry
+        // their own skin, iron and bone, and the render tint stays white unless a status
+        // effect is painting them (frost, poison, oil, fire).
+        Color BaseColor(int i) => KindColor(kind[i]);
+
+        Color RenderTint(int i)
+        {
+            Color c = Color.white;
+            if (slow[i] > 0f) c = Color.Lerp(c, SlowTint, 0.65f);
+            if (oil[i] > 0f) c = Color.Lerp(c, OilTint, 0.6f);
+            if (poison[i] > 0f) c = Color.Lerp(c, PoisonTint, 0.5f + 0.2f * Mathf.Sin(g.RunTime * 12f + i));
+            if (burn[i] > 0f) c = Color.Lerp(c, BurnHot, 0.45f + 0.3f * Mathf.Sin(g.RunTime * 22f + i));
+            return c;
+        }
         float KnockMul(int i) => kind[i] switch
         {
             EnemyKind.Boss => 0.03f,
@@ -659,10 +669,9 @@ namespace Horde
             float windK = bossWindMax > 0f ? Mathf.Clamp01(bossWind / bossWindMax) : 1f;
             float ang = Mathf.Atan2(bossAimDir.y, bossAimDir.x) * Mathf.Rad2Deg;
             float bossSpeed = bossPhase == 2 ? 6f : speed[b];
-            Color bossTint = flash[b] > 0f ? Color.Lerp(TintedColor(b), Color.white, Mathf.Clamp01(flash[b])) : TintedColor(b);
             bossRig.Place(Pos[b], bossPhase == 0 || bossPhase == 3 ? face[b] : ang,
                           Radius[b] * VisualScale(EnemyKind.Boss), dt, bossSpeed, bossPhase,
-                          windK, bossTint, Mathf.Clamp01(flash[b]) * 0.8f + (winding ? windK * 0.5f : 0f));
+                          windK, RenderTint(b), winding ? windK * 0.35f : 0f, Mathf.Clamp01(flash[b]) * 0.85f);
 
             if (winding)
             {

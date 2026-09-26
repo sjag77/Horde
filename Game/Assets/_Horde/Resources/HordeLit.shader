@@ -8,8 +8,10 @@ Shader "Horde/Lit"
         _Tint      ("Tint", Color) = (1,1,1,1)
         _Emissive  ("Emissive", Range(0,4)) = 0
         _Alpha     ("Alpha", Range(0,1)) = 1
+        _Flash     ("Hit Flash", Range(0,1)) = 0
+        _Gloss     ("Gloss", Range(0,1)) = 0.35
         _RimPower  ("Rim Power", Range(0.5,8)) = 3
-        _RimStrength ("Rim Strength", Range(0,2)) = 0.55
+        _RimStrength ("Rim Strength", Range(0,2)) = 0.30
     }
 
     SubShader
@@ -51,10 +53,12 @@ Shader "Horde/Lit"
                 UNITY_DEFINE_INSTANCED_PROP(float4, _Tint)
                 UNITY_DEFINE_INSTANCED_PROP(float, _Emissive)
                 UNITY_DEFINE_INSTANCED_PROP(float, _Alpha)
+                UNITY_DEFINE_INSTANCED_PROP(float, _Flash)
             UNITY_INSTANCING_BUFFER_END(Props)
 
             float _RimPower;
             float _RimStrength;
+            float _Gloss;
 
             Varyings vert(Attributes v)
             {
@@ -76,24 +80,32 @@ Shader "Horde/Lit"
                 float emissive = UNITY_ACCESS_INSTANCED_PROP(Props, _Emissive);
                 float alpha = UNITY_ACCESS_INSTANCED_PROP(Props, _Alpha);
 
-                float3 albedo = i.color.rgb * tint.rgb;
+                float flash = UNITY_ACCESS_INSTANCED_PROP(Props, _Flash);
+                // The model's own baked colours carry the material; the tint only shades them
+                // (status effects), and the flash whitens the whole thing when it is struck.
+                float3 albedo = lerp(i.color.rgb * tint.rgb, float3(1, 1, 1), flash);
                 float3 n = normalize(i.normalWS);
 
                 Light key = GetMainLight();
                 float ndl = saturate(dot(n, key.direction));
                 // two-step ramp keeps the art graphic instead of muddy
-                float ramp = lerp(0.45, 1.0, smoothstep(0.02, 0.55, ndl)) + smoothstep(0.82, 1.0, ndl) * 0.25;
+                float ramp = lerp(0.30, 1.0, smoothstep(0.02, 0.55, ndl)) + smoothstep(0.82, 1.0, ndl) * 0.2;
                 float3 lit = albedo * (key.color * ramp);
 
                 // cool sky fill so the shadow sides read as night-time, not black
                 float sky = saturate(n.y * 0.5 + 0.5);
-                lit += albedo * lerp(float3(0.10, 0.12, 0.22), float3(0.22, 0.26, 0.38), sky);
+                lit += albedo * lerp(float3(0.045, 0.055, 0.10), float3(0.10, 0.12, 0.19), sky);
 
                 // rim light picks every creature out of the horde
                 float rim = pow(1.0 - saturate(dot(n, normalize(i.viewWS))), _RimPower);
                 lit += albedo * rim * _RimStrength;
 
-                lit += albedo * emissive;
+                // a tight specular so leather, bone and iron don't all read as matte plastic
+                float3 h = normalize(key.direction + normalize(i.viewWS));
+                float spec = pow(saturate(dot(n, h)), lerp(12.0, 96.0, _Gloss)) * _Gloss;
+                lit += key.color * spec * (0.25 + 0.5 * ndl) * 0.7;
+
+                lit += albedo * (emissive + flash * 0.6);
                 return half4(lit, i.color.a * tint.a * alpha);
             }
             ENDHLSL

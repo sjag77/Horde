@@ -14,12 +14,13 @@ namespace Horde
         static MaterialPropertyBlock block;
         static readonly int TintId = Shader.PropertyToID("_Tint");
         static readonly int EmissiveId = Shader.PropertyToID("_Emissive");
+        static readonly int FlashId = Shader.PropertyToID("_Flash");
 
         public readonly Transform Tr;
         public readonly MeshFilter Filter;
         public readonly MeshRenderer Renderer;
         Color tint = Color.white;
-        float emissive = -1f;
+        float emissive = -1f, flash;
 
         /// <summary>Models are authored Y-up facing +Z; this lays them onto the XY arena.</summary>
         public static readonly Quaternion Stand = Quaternion.Euler(-90f, 0f, 0f);
@@ -80,15 +81,20 @@ namespace Horde
             Tr.localScale = scale;
         }
 
-        public void SetTint(Color c, float glow = 0f)
+        public void SetTint(Color c, float glow = 0f) => SetLook(c, glow, flash);
+
+        /// <summary>Tint shades the model's baked colours; flash whitens it when it is hit.</summary>
+        public void SetLook(Color c, float glow, float hitFlash)
         {
-            if (c == tint && Mathf.Approximately(glow, emissive)) return;
+            if (c == tint && Mathf.Approximately(glow, emissive) && Mathf.Approximately(hitFlash, flash)) return;
             tint = c;
             emissive = glow;
+            flash = hitFlash;
             block ??= new MaterialPropertyBlock();
             Renderer.GetPropertyBlock(block);
             block.SetColor(TintId, c);
             block.SetFloat(EmissiveId, glow);
+            block.SetFloat(FlashId, hitFlash);
             Renderer.SetPropertyBlock(block);
         }
 

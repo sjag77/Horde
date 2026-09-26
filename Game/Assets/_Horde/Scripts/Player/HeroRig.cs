@@ -61,14 +61,16 @@ namespace Horde
             }
         }
 
+        // The ship keeps its own panelling and glass; the hero colour only washes over it,
+        // so Ember, Venom and Napalm read as different pilots of the same real machine.
         public void SetColor(Color c)
         {
-            tint = c;
-            hull.SetTint(c);
-            wingL.SetTint(c);
-            wingR.SetTint(c);
-            engL.SetTint(c * 0.8f);
-            engR.SetTint(c * 0.8f);
+            tint = Color.Lerp(Color.white, c, 0.55f);
+            hull.SetTint(tint);
+            wingL.SetTint(tint);
+            wingR.SetTint(tint);
+            engL.SetTint(Color.Lerp(Color.white, c, 0.3f));
+            engR.SetTint(Color.Lerp(Color.white, c, 0.3f));
         }
 
         public void Tick(float dt, Vector2 pos, Vector2 facing, Vector2 move, float hurt, bool blinking)
@@ -92,17 +94,10 @@ namespace Horde
             plumeL.SetTint(hot, 1.6f + thrust);
             plumeR.SetTint(hot, 1.6f + thrust);
 
-            if (hurt > 0f)
-            {
-                var flash = Color.Lerp(tint, Color.white, Mathf.Clamp01(hurt));
-                hull.SetTint(flash, Mathf.Clamp01(hurt));
-                wingL.SetTint(flash, Mathf.Clamp01(hurt));
-                wingR.SetTint(flash, Mathf.Clamp01(hurt));
-            }
-            else if (blinking)
-            {
-                hull.SetTint(tint, 0.6f);
-            }
+            float hit = Mathf.Clamp01(hurt);
+            hull.SetLook(tint, blinking ? 0.6f : 0f, hit);
+            wingL.SetLook(tint, 0f, hit);
+            wingR.SetLook(tint, 0f, hit);
 
             for (int i = 0; i < GhostCap; i++)
             {

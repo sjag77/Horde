@@ -43,7 +43,7 @@ namespace Horde
         /// phase: 0 idle/chasing, 1 winding up, 2 charging. speed drives the walk cycle.
         /// </summary>
         public void Place(Vector2 pos, float facingDeg, float scale, float dt, float speed,
-                          int phase, float windK, Color tint, float glow)
+                          int phase, float windK, Color tint, float glow, float flash)
         {
             stride += dt * (2.5f + speed * 2.4f);
             breathe += dt * 2.1f;
@@ -87,13 +87,13 @@ namespace Horde
                 HornFire(auraR, 0.55f, 2.35f + bob, f);
             }
 
-            body.SetTint(tint, glow);
-            head.SetTint(tint, glow);
-            jaw.SetTint(tint, glow);
-            armL.SetTint(tint, glow);
-            armR.SetTint(tint, glow);
-            legL.SetTint(tint, glow);
-            legR.SetTint(tint, glow);
+            body.SetLook(tint, glow, flash);
+            head.SetLook(tint, glow, flash);
+            jaw.SetLook(tint, glow, flash);
+            armL.SetLook(tint, glow, flash);
+            armR.SetLook(tint, glow, flash);
+            legL.SetLook(tint, glow, flash);
+            legR.SetLook(tint, glow, flash);
         }
 
         void ArmAt(Rig r, float x, float y, float swing, float lean)

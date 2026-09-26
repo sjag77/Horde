@@ -401,7 +401,7 @@ namespace Horde
             Cam.farClipPlane = 140f;
             Cam.clearFlags = CameraClearFlags.SolidColor;
             Cam.backgroundColor = new Color(0.035f, 0.04f, 0.07f);
-            Cam.transform.rotation = Quaternion.Euler(CamPitch, 0f, 0f);
+            Cam.transform.rotation = CamRot();
             Cam.transform.position = CamPos(Vector2.zero);
             if (Cam.GetComponent<AudioListener>() == null) Cam.gameObject.AddComponent<AudioListener>();
 
@@ -410,23 +410,33 @@ namespace Horde
             KeyLight = lightGo.AddComponent<Light>();
             KeyLight.type = LightType.Directional;
             KeyLight.color = new Color(1f, 0.94f, 0.85f);
-            KeyLight.intensity = 1.35f;
+            KeyLight.intensity = 1.15f;
             KeyLight.shadows = LightShadows.Hard;
             KeyLight.shadowStrength = 0.55f;
             KeyLight.shadowBias = 0.06f;
             KeyLight.shadowNormalBias = 0.5f;
             lightGo.transform.rotation = Quaternion.LookRotation(new Vector3(-0.42f, -0.55f, 1f).normalized, Vector3.up);
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.16f, 0.19f, 0.30f);
+            RenderSettings.ambientLight = new Color(0.07f, 0.085f, 0.14f);
             RenderSettings.fog = false;
         }
 
-        /// <summary>Where the camera sits to frame a point on the arena floor.</summary>
+        // The camera sits SOUTH of what it looks at and above the floor, looking north and down.
+        // That puts the far distance at the top of the screen and stands the models up towards
+        // it - the other way round and the whole arena reads upside down.
         Vector3 CamPos(Vector2 look)
         {
             float p = CamPitch * Mathf.Deg2Rad;
             float dist = ViewHalfH / Mathf.Tan(CamFov * 0.5f * Mathf.Deg2Rad);
-            return new Vector3(look.x, look.y, 0f) + new Vector3(0f, Mathf.Sin(p), -Mathf.Cos(p)) * dist;
+            return new Vector3(look.x, look.y, 0f) + new Vector3(0f, -Mathf.Sin(p), -Mathf.Cos(p)) * dist;
+        }
+
+        static Quaternion CamRot()
+        {
+            float p = CamPitch * Mathf.Deg2Rad;
+            var forward = new Vector3(0f, Mathf.Sin(p), Mathf.Cos(p));    // north and down into the floor
+            var up = new Vector3(0f, Mathf.Cos(p), -Mathf.Sin(p));        // out of the floor, tipped north
+            return Quaternion.LookRotation(forward, up);
         }
 
         Material MakeMaterial(string shaderName, string name)
@@ -473,38 +483,173 @@ namespace Horde
         void BuildArena()
         {
             var root = new GameObject("Arena").transform;
-            var floor = NewSprite("Floor", Sprites.Floor, Color.white, -20, root);
-            floor.drawMode = SpriteDrawMode.Tiled;
-            floor.size = new Vector2(ArenaHalfW * 2f, ArenaHalfH * 2f);
-            floor.transform.position = new Vector3(0f, 0f, 0.06f);   // just under the decals
+            BuildFloor(root);
             BuildWalls(root);
-            var grid = new Color(0.25f, 0.35f, 0.55f, 0.05f);
-            for (float x = -ArenaHalfW; x <= ArenaHalfW + 0.01f; x += 3f)
-                Line(root, new Vector2(x, 0f), new Vector2(0.04f, ArenaHalfH * 2f), grid, -10);
-            for (float y = -ArenaHalfH; y <= ArenaHalfH + 0.01f; y += 3f)
-                Line(root, new Vector2(0f, y), new Vector2(ArenaHalfW * 2f, 0.04f), grid, -10);
-
+            BuildProps(root);
         }
 
-        // Real walls around the arena so the edge of the world reads in 3D.
+        // A real flagstone floor: one mesh, colour varied slab by slab so the ground reads as
+        // worn stone instead of a flat sheet. Blast rings and mine markers are drawn as decals
+        // just above it.
+        void BuildFloor(Transform root)
+        {
+            const float slab = 2f;
+            int nx = Mathf.CeilToInt(ArenaHalfW * 2f / slab), ny = Mathf.CeilToInt(ArenaHalfH * 2f / slab);
+            var b = new MeshBuilder();
+            uint seed = 12345;
+            float Rand()
+            {
+                seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+                return (seed & 0xFFFF) / 65535f;
+            }
+            var cold = new Color(0.115f, 0.135f, 0.20f);
+            var warm = new Color(0.175f, 0.165f, 0.175f);
+            var moss = new Color(0.12f, 0.19f, 0.15f);
+            for (int j = 0; j < ny; j++)
+                for (int i = 0; i < nx; i++)
+                {
+                    float x = -ArenaHalfW + i * slab, y = -ArenaHalfH + j * slab;
+                    float r = Rand();
+                    Color c = Color.Lerp(cold, warm, Rand());
+                    if (r > 0.88f) c = Color.Lerp(c, moss, 0.65f);          // mossy slab
+                    if (r < 0.06f) c *= 0.55f;                               // a missing, sunken stone
+                    float inset = 0.06f + Rand() * 0.05f;                    // mortar gap between slabs
+                    b.Box(new Vector3(x + slab * 0.5f, -0.05f, y + slab * 0.5f),
+                          new Vector3(slab - inset, 0.1f, slab - inset), c);
+                }
+            // the dark mortar bed under the slabs
+            b.Box(new Vector3(0f, -0.14f, 0f), new Vector3(ArenaHalfW * 2f, 0.1f, ArenaHalfH * 2f), new Color(0.05f, 0.055f, 0.08f));
+            var rig = NewRig("Floor", b.Build("Floor"), Color.white, root, false, false);
+            rig.Tr.rotation = Rig.Stand;
+            rig.Renderer.receiveShadows = true;                              // the horde casts shadows onto it
+        }
+
+        // Rubble, bones, broken pillars and burning braziers scattered around the arena, so the
+        // ground has depth and the place looks lived in (and died in).
+        void BuildProps(Transform root)
+        {
+            var b = new MeshBuilder();
+            var glowB = new MeshBuilder();
+            uint seed = 777;
+            float Rand()
+            {
+                seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+                return (seed & 0xFFFF) / 65535f;
+            }
+            var stone = new Color(0.30f, 0.31f, 0.35f);
+            var stoneDark = new Color(0.19f, 0.20f, 0.24f);
+            var bone = new Color(0.72f, 0.69f, 0.60f);
+            var wood = new Color(0.25f, 0.17f, 0.11f);
+            var ember = new Color(1f, 0.55f, 0.15f);
+
+            for (int k = 0; k < 190; k++)
+            {
+                float x = (Rand() * 2f - 1f) * (ArenaHalfW - 1.5f);
+                float z = (Rand() * 2f - 1f) * (ArenaHalfH - 1.5f);
+                if (Mathf.Abs(x) < 4f && Mathf.Abs(z) < 4f) continue;        // keep the spawn clear
+                float pick = Rand();
+                var at = new Vector3(x, 0f, z);
+                if (pick < 0.45f)                                            // rubble
+                {
+                    int n = 1 + (int)(Rand() * 3f);
+                    for (int i = 0; i < n; i++)
+                    {
+                        float r = 0.12f + Rand() * 0.22f;
+                        b.Sphere(at + new Vector3((Rand() - 0.5f) * 0.9f, r * 0.55f, (Rand() - 0.5f) * 0.9f),
+                                 new Vector3(r, r * 0.7f, r * 0.85f), Color.Lerp(stone, stoneDark, Rand()), 6, 4);
+                    }
+                }
+                else if (pick < 0.68f)                                       // bones in the dirt
+                {
+                    float a = Rand() * Mathf.PI;
+                    var d = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * (0.3f + Rand() * 0.35f);
+                    b.Limb(at + Vector3.up * 0.06f - d, at + Vector3.up * 0.06f + d, 0.045f, 0.045f, bone, 5);
+                    if (Rand() > 0.6f) b.Sphere(at + Vector3.up * 0.12f + d * 1.2f, 0.11f, bone, 7, 5);
+                }
+                else if (pick < 0.86f)                                       // broken pillar
+                {
+                    float h = 0.5f + Rand() * 1.5f;
+                    b.Tube(at, at + new Vector3((Rand() - 0.5f) * 0.25f, h, (Rand() - 0.5f) * 0.25f),
+                           0.26f, 0.22f, stone, 7);
+                    b.Box(at + Vector3.up * 0.05f, new Vector3(0.7f, 0.1f, 0.7f), stoneDark);
+                }
+                else if (pick < 0.95f)                                       // stake with a skull
+                {
+                    float h = 1.1f + Rand() * 0.7f;
+                    b.Tube(at, at + new Vector3(0f, h, 0f), 0.06f, 0.045f, wood, 5);
+                    b.Sphere(at + new Vector3(0f, h + 0.1f, 0f), new Vector3(0.14f, 0.15f, 0.15f), bone, 8, 6);
+                    b.Sphere(at + new Vector3(0.05f, h + 0.11f, 0.11f), 0.035f, Color.black, 5, 4);
+                    b.Sphere(at + new Vector3(-0.05f, h + 0.11f, 0.11f), 0.035f, Color.black, 5, 4);
+                }
+                else                                                          // brazier
+                {
+                    b.Tube(at, at + new Vector3(0f, 0.7f, 0f), 0.09f, 0.07f, stoneDark, 6);
+                    b.Tube(at + new Vector3(0f, 0.7f, 0f), at + new Vector3(0f, 1.0f, 0f), 0.16f, 0.26f, stone, 8);
+                    glowB.Sphere(at + new Vector3(0f, 1.05f, 0f), new Vector3(0.22f, 0.3f, 0.22f), ember, 8, 6);
+                }
+            }
+            var props = NewRig("Props", b.Build("Props"), Color.white, root);
+            props.Tr.rotation = Rig.Stand;
+            var fires = NewRig("BrazierFires", glowB.Build("Fires"), Color.white, root, true);
+            fires.Tr.rotation = Rig.Stand;
+            fires.SetTint(new Color(1f, 0.6f, 0.2f), 1.8f);
+        }
+
+        // The edge of the world: a mortared stone rampart with a lit coping and torch sconces.
         void BuildWalls(Transform root)
         {
             var b = new MeshBuilder();
-            var stone = new Color(0.30f, 0.34f, 0.46f);
-            var cap = new Color(0.55f, 0.85f, 1f);
-            const float t = 0.7f, h = 1.7f;
+            var glow = new MeshBuilder();
+            var stone = new Color(0.26f, 0.28f, 0.34f);
+            var stoneDark = new Color(0.16f, 0.17f, 0.22f);
+            var cap = new Color(0.45f, 0.70f, 0.88f);
+            const float t = 0.9f, h = 2.4f;
             float w = ArenaHalfW + t * 0.5f, d = ArenaHalfH + t * 0.5f;
-            // built in model space (Y up) and laid down with the same Stand rotation as everything else
-            b.Box(new Vector3(-w, h * 0.5f, 0f), new Vector3(t, h, d * 2f + t * 2f), stone, 0.7f);
-            b.Box(new Vector3(w, h * 0.5f, 0f), new Vector3(t, h, d * 2f + t * 2f), stone, 0.7f);
-            b.Box(new Vector3(0f, h * 0.5f, -d), new Vector3(w * 2f + t * 2f, h, t), stone, 0.7f);
-            b.Box(new Vector3(0f, h * 0.5f, d), new Vector3(w * 2f + t * 2f, h, t), stone, 0.7f);
-            b.Box(new Vector3(-w, h + 0.06f, 0f), new Vector3(t * 0.7f, 0.12f, d * 2f + t * 2f), cap);
-            b.Box(new Vector3(w, h + 0.06f, 0f), new Vector3(t * 0.7f, 0.12f, d * 2f + t * 2f), cap);
-            b.Box(new Vector3(0f, h + 0.06f, -d), new Vector3(w * 2f + t * 2f, 0.12f, t * 0.7f), cap);
-            b.Box(new Vector3(0f, h + 0.06f, d), new Vector3(w * 2f + t * 2f, 0.12f, t * 0.7f), cap);
+
+            b.Box(new Vector3(-w, h * 0.5f, 0f), new Vector3(t, h, d * 2f + t * 2f), stone, 0.78f);
+            b.Box(new Vector3(w, h * 0.5f, 0f), new Vector3(t, h, d * 2f + t * 2f), stone, 0.78f);
+            b.Box(new Vector3(0f, h * 0.5f, -d), new Vector3(w * 2f + t * 2f, h, t), stone, 0.78f);
+            b.Box(new Vector3(0f, h * 0.5f, d), new Vector3(w * 2f + t * 2f, h, t), stone, 0.78f);
+
+            // course lines so the rampart reads as blocks, and battlement teeth along the top
+            for (int c = 0; c < 3; c++)
+            {
+                float y = 0.5f + c * 0.65f;
+                b.Box(new Vector3(-w, y, 0f), new Vector3(t * 1.04f, 0.07f, d * 2f + t * 2f), stoneDark);
+                b.Box(new Vector3(w, y, 0f), new Vector3(t * 1.04f, 0.07f, d * 2f + t * 2f), stoneDark);
+                b.Box(new Vector3(0f, y, -d), new Vector3(w * 2f + t * 2f, 0.07f, t * 1.04f), stoneDark);
+                b.Box(new Vector3(0f, y, d), new Vector3(w * 2f + t * 2f, 0.07f, t * 1.04f), stoneDark);
+            }
+            for (float p = -ArenaHalfW; p <= ArenaHalfW + 0.01f; p += 3.2f)
+            {
+                b.Box(new Vector3(p, h + 0.22f, -d), new Vector3(1.5f, 0.44f, t * 0.9f), stoneDark);
+                b.Box(new Vector3(p, h + 0.22f, d), new Vector3(1.5f, 0.44f, t * 0.9f), stoneDark);
+            }
+            for (float p = -ArenaHalfH; p <= ArenaHalfH + 0.01f; p += 3.2f)
+            {
+                b.Box(new Vector3(-w, h + 0.22f, p), new Vector3(t * 0.9f, 0.44f, 1.5f), stoneDark);
+                b.Box(new Vector3(w, h + 0.22f, p), new Vector3(t * 0.9f, 0.44f, 1.5f), stoneDark);
+            }
+            // a thin lit coping so the boundary is unmistakable in the dark
+            b.Box(new Vector3(-w, h + 0.02f, 0f), new Vector3(t * 0.6f, 0.1f, d * 2f + t * 2f), cap);
+            b.Box(new Vector3(w, h + 0.02f, 0f), new Vector3(t * 0.6f, 0.1f, d * 2f + t * 2f), cap);
+            b.Box(new Vector3(0f, h + 0.02f, -d), new Vector3(w * 2f + t * 2f, 0.1f, t * 0.6f), cap);
+            b.Box(new Vector3(0f, h + 0.02f, d), new Vector3(w * 2f + t * 2f, 0.1f, t * 0.6f), cap);
+
+            // torches down the walls
+            for (float p = -ArenaHalfH + 6f; p < ArenaHalfH; p += 12f)
+                for (int s = -1; s <= 1; s += 2)
+                {
+                    var at = new Vector3(s * (w - t * 0.5f), 1.5f, p);
+                    b.Tube(at, at + new Vector3(-s * 0.35f, 0.3f, 0f), 0.07f, 0.05f, new Color(0.22f, 0.15f, 0.10f), 5);
+                    glow.Sphere(at + new Vector3(-s * 0.4f, 0.45f, 0f), new Vector3(0.2f, 0.3f, 0.2f), new Color(1f, 0.6f, 0.2f), 8, 6);
+                }
+
             var rig = NewRig("Walls", b.Build("Walls"), Color.white, root);
             rig.Tr.rotation = Rig.Stand;
+            var fire = NewRig("WallTorches", glow.Build("Torches"), Color.white, root, true);
+            fire.Tr.rotation = Rig.Stand;
+            fire.SetTint(new Color(1f, 0.62f, 0.22f), 1.7f);
         }
 
         void Line(Transform parent, Vector2 center, Vector2 size, Color color, int order)
